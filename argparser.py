@@ -52,6 +52,8 @@ def arg_parser():
 
     parser.add_argument('--log-folder', type=str, default='../logs',
                         help='Where to store results.')
+    parser.add_argument('--log-fpath', type=str, default='temp.json',
+                        help='Path to the log file (default: temp.json).')
     parser.add_argument('--reload-model', type=str, default="false",
                         help='Reload model from a .pth file.')
     parser.add_argument('--save-model', type=str, default=None,)

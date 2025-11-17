@@ -6,6 +6,9 @@ import copy
 from gradient import get_gradient
 
 from sharpness import get_hessian_eigenvalues
+import os
+import json
+import time
 def init_corrections(args, model_copies, train_loaders, criterion):
     gradients = [0.0] * args.world_size
     for client in range(args.world_size):
@@ -179,6 +182,60 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
             global_eval = get_hessian_eigenvalues(model, criterion, train_loaders)
             global_evals.append(float(global_eval[0]))
             # Evaluation code here (omitted for brevity)
+    def _to_py(obj):
+        if isinstance(obj, torch.Tensor):
+            if obj.numel() == 1:
+                return float(obj.item())
+            return obj.detach().cpu().tolist()
+        if isinstance(obj, (float, int, str, bool)):
+            return obj
+        if isinstance(obj, dict):
+            return {k: _to_py(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_py(x) for x in obj]
+        try:
+            return float(obj)
+        except Exception:
+            return str(obj)
+
+    # assemble metrics
+    metrics = {
+        "train_accuracies": train_accuracies,
+        "train_losses": train_losses,
+        "test_accuracies": test_accuracies,
+        "test_losses": test_losses,
+        "scaffold_comparisons": scaffold_comparisons,
+        "local_evals": local_evals,
+        "global_evals": global_evals,
+        "metadata": {
+            "lr": args.eta0,
+            "rounds": args.rounds,
+            "communication_interval": args.communication_interval,
+            "algorithm": args.algorithm,
+            "world_size": args.world_size,
+            "model": args.model,
+            "dataset": args.dataset,
+            "layers": args.layers,
+            "width": args.width,
+            "loss": args.loss,
+            "heterogeneity": args.heterogeneity,
+            "full_batch": args.full_batch,
+            "batchsize": args.batchsize
+        }
+    }
+
+    # convert everything to JSON-serializable python types
+    metrics_serializable = _to_py(metrics)
+
+    # prepare output path
+    outpath = os.path.join(args.log_folder, args.log_fpath)
+    os.makedirs(os.path.dirname(outpath), exist_ok=True)
+    out_path = outpath
+
+    with open(out_path, "w") as f:
+        json.dump(metrics_serializable, f, indent=2)
+
+    print(f"Saved metrics to {out_path}")
     print("Training complete.")
             
     
