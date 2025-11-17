@@ -13,7 +13,7 @@ def get_gradient(model, train_loaders, criterion):
         loss = criterion(outputs, labels)
         loss.backward()
 
-        grad = torch.nn.utils.parameters_to_vector([param.grad for param in model.parameters()]).detach().cpu()
+        grad = torch.nn.utils.parameters_to_vector([param.grad for param in model.parameters()]).detach().clone()
         grads = grads * n / (n + 1) + grad / (n + 1)
         n += 1
     return grads

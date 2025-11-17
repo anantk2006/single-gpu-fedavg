@@ -72,9 +72,8 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                 optimizer = optimizers[client]
                 train_loader = train_loaders[client]
                 model.train()
-                round_avg_grad = [torch.zeros_like(p.data) for p in model.parameters()]
                 for step in range(args.communication_interval):
-                    data = train_loader.next()
+                    data = next(iter(train_loader))
                     inputs, labels = data
                     inputs, labels = inputs.cuda(), labels.cuda()
                     model.cuda()
@@ -99,9 +98,9 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                             preds = (outputs.squeeze() > 0.5).long()
                         batch_acc = (preds == labels).float().mean().item() * 100.0
                         train_accuracies[client].append(batch_acc)
-                        if (round + 1) % (args.rounds // args.num_evals) == 0:
-                            local_eval = get_hessian_eigenvalues(model, criterion, [train_loader])
-                            local_evals.append(float(local_eval[0]))
+                    if (round + 1) % (args.rounds // args.num_evals) == 0:
+                        local_eval = get_hessian_eigenvalues(model, criterion, [train_loader])
+                        local_evals.append(float(local_eval[0]))
                     if args.algorithm == "scaffold" and (round + 1) % (args.rounds // args.num_evals) == 0:
                         torch.cuda.synchronize()
                         
