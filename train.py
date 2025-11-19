@@ -10,7 +10,7 @@ import os
 import json
 import time
 def init_corrections(args, model_copies, train_loaders, criterion):
-    gradients = [0.0] * args.world_size
+    gradients = [[0.0] * len(list(model.parameters())) for model in model_copies]
     for client in range(args.world_size):
         train_loader = train_loaders[client]
         net = model_copies[client]
@@ -26,8 +26,7 @@ def init_corrections(args, model_copies, train_loaders, criterion):
             current_grad = [
                 p.grad.clone().detach() for p in net.parameters() if p.grad is not None
             ]
-            if gradients[client] == 0.0:
-                gradients[client] = current_grad
+            
             for j in range(len(gradients[client])):
                 gradients[client][j] += current_grad[j] / args.communication_interval
     local_corrections = gradients
@@ -86,22 +85,23 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                     loss = criterion(outputs, labels)
                     loss.backward()
                     round_avg_grad[client] = [
-                        round_avg_grad[client][i] + p.grad.data / args.communication_interval
+                        round_avg_grad[client][i] + p.grad.data.detach().clone() / args.communication_interval
                         for i, p in enumerate(model.parameters())
                     ]
                     optimizer.step(
                         local_correction=local_corrections[client] if local_corrections is not None else None,
                         global_correction=global_correction,
                     )
-                    train_losses[client].append(loss.item())
-                    with torch.no_grad():
-                        if outputs.dim() > 1 and outputs.size(1) > 1:
-                            preds = outputs.argmax(dim=1)
-                        else:
-                            preds = (outputs.squeeze() > 0.5).long()
-                        batch_acc = (preds == labels).float().mean().item() * 100.0
-                        train_accuracies[client].append(batch_acc)
+                    
                     if (round + 1) % (args.rounds // args.num_evals) == 0:
+                        train_losses[client].append(float(loss.item()))
+                        with torch.no_grad():
+                            if outputs.dim() > 1 and outputs.size(1) > 1:
+                                preds = outputs.argmax(dim=1)
+                            else:
+                                preds = (outputs.squeeze() > 0.5).long()
+                            batch_acc = (preds == labels).float().mean().item() * 100.0
+                            train_accuracies[client].append(batch_acc)
                         local_eval = get_hessian_eigenvalues(model, criterion, [train_loader])
                         local_evals.append(float(local_eval[0]))
                     if args.algorithm == "scaffold" and (round + 1) % (args.rounds // args.num_evals) == 0:
