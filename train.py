@@ -19,7 +19,6 @@ def init_corrections(args, model_copies, train_loaders, criterion):
             data = next(iter(train_loader))
             inputs, labels = data
             inputs, labels = inputs.cuda(), labels.cuda()
-            net.cuda()
             outputs = net(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
@@ -38,6 +37,8 @@ def init_corrections(args, model_copies, train_loaders, criterion):
 
 
 def train_models(args, model_copies, train_loaders, val_loader, test_loader):
+    model_copies = [model.cuda() for model in model_copies]
+    datasets = [[(labels.cuda() , inputs.cuda()) for (inputs, labels) in train_loaders[i]] for i in range(args.world_size)]
     criterion = nn.CrossEntropyLoss() if args.loss == "cross_entropy" else nn.MSELoss()
     optimizers = [SGDClipGrad(
         model.parameters(),
@@ -68,24 +69,20 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
     for round in range(args.rounds): 
         for client in range(args.world_size):
             stream = streams[client]
-            round_avg_grad = [[torch.zeros_like(p.data) for p in model.parameters()] for model in model_copies]
+            round_avg_grad = [torch.zeros_like(p.data) for p in model.parameters()]
             with torch.cuda.stream(stream):
                 model = model_copies[client]
                 optimizer = optimizers[client]
-                train_loader = train_loaders[client]
+                inputs, labels = datasets[client][0]
                 model.train()
                 for step in range(args.communication_interval):
-                    data = next(iter(train_loader))
-                    inputs, labels = data
-                    inputs, labels = inputs.cuda(), labels.cuda()
-                    model.cuda()
 
                     optimizer.zero_grad()
                     outputs = model(inputs)
                     loss = criterion(outputs, labels)
                     loss.backward()
-                    round_avg_grad[client] = [
-                        round_avg_grad[client][i] + p.grad.data.detach().clone() / args.communication_interval
+                    round_avg_grad = [
+                        round_avg_grad[i] + p.grad.data.detach().clone() / args.communication_interval
                         for i, p in enumerate(model.parameters())
                     ]
                     optimizer.step(
@@ -102,7 +99,7 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                                 preds = (outputs.squeeze() > 0.5).long()
                             batch_acc = (preds == labels).float().mean().item() * 100.0
                             train_accuracies[client].append(batch_acc)
-                        local_eval = get_hessian_eigenvalues(model, criterion, [train_loader])
+                        local_eval = get_hessian_eigenvalues(model, criterion, [[(inputs, labels)]])
                         local_evals.append(float(local_eval[0]))
                     if args.algorithm == "scaffold" and (round + 1) % (args.rounds // args.num_evals) == 0:
                         torch.cuda.synchronize()
@@ -117,11 +114,11 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                             comparison3 = torch.dot(local_grad, global_grad) / (torch.norm(global_grad) * torch.norm(local_grad) + 1e-10)
                             comparison4 = torch.dot(scaffold_grad, global_grad) / (torch.norm(global_grad) * torch.norm(scaffold_grad) + 1e-10)
                             scaffold_comparisons.append((comparison1, comparison2, comparison3, comparison4))
-                local_corrections[client] = round_avg_grad[client]
-                global_correction = [0.0] * len(local_corrections[0])
-                for i in range(args.world_size):
-                    for j in range(len(local_corrections[i])):
-                        global_correction[j] += local_corrections[i][j] / args.world_size
+            local_corrections[client] = round_avg_grad
+        global_correction = [0.0] * len(local_corrections[0])
+        for i in range(args.world_size):
+            for j in range(len(local_corrections[i])):
+                global_correction[j] += local_corrections[i][j] / args.world_size
 
 
         torch.cuda.synchronize()

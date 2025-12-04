@@ -4,9 +4,7 @@ def get_gradient(model, train_loaders, criterion):
     n = 0
     for train_loader in train_loaders:
         model.train()
-        inputs, labels = next(iter(train_loader))
-        inputs, labels = inputs.cuda(), labels.cuda()
-        model.cuda()
+        inputs, labels = train_loader[0]
 
         model.zero_grad()
         outputs = model(inputs)
