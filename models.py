@@ -74,3 +74,46 @@ class CIFAR_CNN(nn.Module):
         x = self.features(x)
         x = self.classifier(x)
         return x  
+        
+import torch.nn.functional as F
+
+class VariableCNN(nn.Module):
+    def __init__(self, num_layers=3, base_channels=32, outputs=10):
+        super().__init__()
+
+        self.num_layers = num_layers
+        self.base_channels = base_channels
+
+        self.convs = nn.ModuleList()
+        in_ch = 1
+        out_ch = base_channels
+
+        for i in range(num_layers):
+            self.convs.append(
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+            )
+            in_ch = out_ch
+            out_ch *= 2   # optional: double channels per layer
+
+        # Placeholder — will be initialized after first forward pass
+        self.fc = None
+
+    def _init_fc(self, x):
+        """Initialize the final FC layer once the flattened size is known."""
+        flat_dim = x.shape[1]
+        self.fc = nn.Linear(flat_dim, 10).to(x.device)
+
+    def forward(self, x):
+        h = x
+        for i, conv in enumerate(self.convs):
+            h = F.relu(conv(h))
+            if (i + 1) % 2 == 0:        # MaxPool every 2 conv layers
+                h = F.max_pool2d(h, 2)
+
+        h = torch.flatten(h, 1)
+
+        # Initialize FC lazily based on the resulting size
+        if self.fc is None:
+            self._init_fc(h)
+
+        return self.fc(h)

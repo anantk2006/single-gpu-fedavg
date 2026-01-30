@@ -38,7 +38,7 @@ def init_corrections(args, model_copies, train_loaders, criterion):
 
 def train_models(args, model_copies, train_loaders, val_loader, test_loader):
     model_copies = [model.cuda() for model in model_copies]
-    datasets = [[(labels.cuda() , inputs.cuda()) for (inputs, labels) in train_loaders[i]] for i in range(args.world_size)]
+    datasets = [[(inputs.cuda() , labels.cuda()) for (inputs, labels) in train_loaders[i]] for i in range(args.world_size)]
     criterion = nn.CrossEntropyLoss() if args.loss == "cross_entropy" else nn.MSELoss()
     optimizers = [SGDClipGrad(
         model.parameters(),
@@ -69,16 +69,18 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
     for round in range(args.rounds): 
         for client in range(args.world_size):
             stream = streams[client]
-            round_avg_grad = [torch.zeros_like(p.data) for p in model.parameters()]
+
+    
             with torch.cuda.stream(stream):
                 model = model_copies[client]
+
+                round_avg_grad = [torch.zeros_like(p.data) for p in model.parameters()]
                 optimizer = optimizers[client]
                 inputs, labels = datasets[client][0]
                 model.train()
                 for step in range(args.communication_interval):
-
                     optimizer.zero_grad()
-                    outputs = model(inputs)
+                    outputs = model(inputs.float())
                     loss = criterion(outputs, labels)
                     loss.backward()
                     round_avg_grad = [
@@ -99,26 +101,29 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                                 preds = (outputs.squeeze() > 0.5).long()
                             batch_acc = (preds == labels).float().mean().item() * 100.0
                             train_accuracies[client].append(batch_acc)
-                        local_eval = get_hessian_eigenvalues(model, criterion, [[(inputs, labels)]])
-                        local_evals.append(float(local_eval[0]))
-                    if args.algorithm == "scaffold" and (round + 1) % (args.rounds // args.num_evals) == 0:
-                        torch.cuda.synchronize()
+                       
+                        # local_eval = get_hessian_eigenvalues(model, criterion, [[(inputs, labels)]])
+                        # local_evals.append(float(local_eval[0]))
+                    # if args.algorithm == "scaffold" and (round + 1) % (args.rounds // args.num_evals) == 0:
+                    #     torch.cuda.synchronize()
                         
-                        for i in range(args.world_size):
-                            deepcopy = copy.deepcopy(model_copies[i])
-                            local_grad = get_gradient(deepcopy, [train_loaders[i]], criterion)
-                            global_grad = get_gradient(deepcopy, train_loaders, criterion)
-                            scaffold_grad = local_grad + torch.cat([g.view(-1) for g in global_correction]) - torch.cat([g.view(-1) for g in local_corrections[i]])
-                            comparison1 = torch.norm(local_grad - global_grad).item()
-                            comparison2 = torch.norm(scaffold_grad - global_grad).item()
-                            comparison3 = torch.dot(local_grad, global_grad) / (torch.norm(global_grad) * torch.norm(local_grad) + 1e-10)
-                            comparison4 = torch.dot(scaffold_grad, global_grad) / (torch.norm(global_grad) * torch.norm(scaffold_grad) + 1e-10)
-                            scaffold_comparisons.append((comparison1, comparison2, comparison3, comparison4))
-            local_corrections[client] = round_avg_grad
-        global_correction = [0.0] * len(local_corrections[0])
-        for i in range(args.world_size):
-            for j in range(len(local_corrections[i])):
-                global_correction[j] += local_corrections[i][j] / args.world_size
+                    #     for i in range(args.world_size):
+                    #         deepcopy = copy.deepcopy(model_copies[i])
+                    #         local_grad = get_gradient(deepcopy, [datasets[i]], criterion)
+                    #         global_grad = get_gradient(deepcopy, datasets, criterion)
+                    #         scaffold_grad = local_grad + torch.cat([g.view(-1) for g in global_correction]) - torch.cat([g.view(-1) for g in local_corrections[i]])
+                    #         comparison1 = torch.norm(local_grad - global_grad).item()
+                    #         comparison2 = torch.norm(scaffold_grad - global_grad).item()
+                    #         comparison3 = torch.dot(local_grad, global_grad) / (torch.norm(global_grad) * torch.norm(local_grad) + 1e-10)
+                    #         comparison4 = torch.dot(scaffold_grad, global_grad) / (torch.norm(global_grad) * torch.norm(scaffold_grad) + 1e-10)
+                    #         scaffold_comparisons.append((comparison1, comparison2, comparison3, comparison4))
+                if args.algorithm == "scaffold":
+                    local_corrections[client] = round_avg_grad
+            if args.algorithm == "scaffold":
+                global_correction = [0.0] * len(local_corrections[0])
+                for i in range(args.world_size):
+                    for j in range(len(local_corrections[i])):
+                        global_correction[j] += local_corrections[i][j] / args.world_size
 
 
         torch.cuda.synchronize()
@@ -142,12 +147,12 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
             averaged_sd = {k: avg_state[k].to(device) for k in avg_state}
             m.load_state_dict(averaged_sd)
         # Evaluate models periodically
+        print(f"Round {round} complete")
         if (round + 1) % (args.rounds // args.num_evals) == 0:
             # Evaluate averaged model on test set
             model = model_copies[0]
             model.eval()
             device = next(model.parameters()).device
-
             total_loss = 0.0
             total_correct = 0
             total_samples = 0
@@ -176,8 +181,9 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
             test_accuracies.append(test_acc)
 
             # Optional: compute global Hessian/eigenvalue estimate on the test set
-            global_eval = get_hessian_eigenvalues(model, criterion, train_loaders)
-            global_evals.append(float(global_eval[0]))
+            if args.individual_evals:
+                global_eval = get_hessian_eigenvalues(model, criterion, train_loaders, neigs=1)
+                global_evals.append(float(global_eval[0]))
             # Evaluation code here (omitted for brevity)
     def _to_py(obj):
         if isinstance(obj, torch.Tensor):
@@ -234,5 +240,3 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
 
     print(f"Saved metrics to {out_path}")
     print("Training complete.")
-            
-    

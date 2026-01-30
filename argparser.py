@@ -59,5 +59,6 @@ def arg_parser():
     parser.add_argument('--save-model', type=str, default=None,)
 
     parser.add_argument("--width", type=int, default=200, help="CIFAR hidden size for use in e_val experiments")
+    parser.add_argument("--checkpoint", action="store_true")
 
     return parser.parse_args()

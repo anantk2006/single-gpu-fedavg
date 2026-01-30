@@ -24,11 +24,15 @@ if args.model == "CNN":
             from models import CIFAR_CNN
             net = CIFAR_CNN(num_layers=args.layers, num_classes=10)
     elif args.dataset == "MNIST" or args.dataset == "FashionMNIST":
-        from models import SimpleCNN
-
-        in_size = (28, 28, 1)
-        out_size = 10
-        net = SimpleCNN(in_size=in_size, out_size=out_size)
+        if args.layers == 3:
+            from models import SimpleCNN
+        
+            in_size = (28, 28, 1)
+            out_size = 10
+            net = SimpleCNN(in_size=in_size, out_size=out_size)
+        else:
+            from models import VariableCNN
+            net = VariableCNN(num_layers=args.layers)
 
 elif args.model == "MLP":
     start_size = 32*32*3 if args.dataset == "CIFAR10" else 28*28*1
@@ -43,6 +47,17 @@ elif args.model == "MLP":
 
 else:
     raise ValueError(f"Model {args.model} not recognized.")
+
+if args.reload_model != "false":
+    state_dict = torch.load(args.reload_model, map_location = torch.device("cuda:0"))
+    if args.algorithm == "scaffold":
+        local_corrections = state_dict["local_corrections"]
+        global_correction = state_dict["global_correction"]
+        del state_dict["local_corrections"]
+        del state_dict["global_correction"]
+        net.load_state_dict(state_dict)
+    else:
+        net.load_state_dict(state_dict)
 
 num_copies = int(args.world_size)
 model_copies = [copy.deepcopy(net) for _ in range(num_copies)]
@@ -63,6 +78,12 @@ datasets = dataloader.data_loader(
 train_loaders, val_loader, test_loader = datasets
 print(f"Initialized {args.model} model with {args.layers} layers for {args.dataset} dataset.")
 
+# lazy init of model weights
+for model, train_loader in zip(model_copies, train_loaders):
+    model.cuda()
+    model(next(iter(train_loader))[0].cuda())
+    model.zero_grad()
+
 train_models(
     args,
     model_copies,
@@ -70,12 +91,6 @@ train_models(
     val_loader,
     test_loader
 )
-
-
-
-
-
-
 
 
 
