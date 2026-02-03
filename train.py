@@ -58,14 +58,15 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
     
     streams = [torch.cuda.Stream() for _ in range(args.world_size)]
     train_accuracies = [[] for _ in range(args.world_size)]
-    train_losses = [[] for _ in range(args.world_size)]
+    train_losses = []
     test_accuracies = []
     test_losses = []
 
     scaffold_comparisons = []
     local_evals = []
     global_evals = []
-    
+    for client in range(args.world_size):
+        print(datasets[client][0][0].sum())
     for round in range(args.rounds): 
         for client in range(args.world_size):
             stream = streams[client]
@@ -93,7 +94,6 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                     )
                     
                     if (round + 1) % (args.rounds // args.num_evals) == 0:
-                        train_losses[client].append(float(loss.item()))
                         with torch.no_grad():
                             if outputs.dim() > 1 and outputs.size(1) > 1:
                                 preds = outputs.argmax(dim=1)
@@ -180,6 +180,8 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
             test_losses.append(avg_test_loss)
             test_accuracies.append(test_acc)
 
+            grads, loss = get_gradient(model, datasets, criterion)
+            train_losses.append(loss)
             # Optional: compute global Hessian/eigenvalue estimate on the test set
             if args.individual_evals:
                 global_eval = get_hessian_eigenvalues(model, criterion, train_loaders, neigs=1)
