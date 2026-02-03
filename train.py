@@ -117,13 +117,13 @@ def train_models(args, model_copies, train_loaders, val_loader, test_loader):
                     #         comparison3 = torch.dot(local_grad, global_grad) / (torch.norm(global_grad) * torch.norm(local_grad) + 1e-10)
                     #         comparison4 = torch.dot(scaffold_grad, global_grad) / (torch.norm(global_grad) * torch.norm(scaffold_grad) + 1e-10)
                     #         scaffold_comparisons.append((comparison1, comparison2, comparison3, comparison4))
-                if args.algorithm == "scaffold":
-                    local_corrections[client] = round_avg_grad
             if args.algorithm == "scaffold":
-                global_correction = [0.0] * len(local_corrections[0])
-                for i in range(args.world_size):
-                    for j in range(len(local_corrections[i])):
-                        global_correction[j] += local_corrections[i][j] / args.world_size
+                local_corrections[client] = round_avg_grad
+        if args.algorithm == "scaffold":
+            global_correction = [0.0] * len(local_corrections[0])
+            for i in range(args.world_size):
+                for j in range(len(local_corrections[i])):
+                    global_correction[j] += local_corrections[i][j] / args.world_size
 
 
         torch.cuda.synchronize()
